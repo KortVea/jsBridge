@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS Bridge Demo</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 16px;
+            transition: background-color 0.3s;
+            min-height: 100vh;
+        }
+        h1 { font-size: 1.2rem; margin-bottom: 12px; }
+        h2 { font-size: 1rem; margin-bottom: 8px; color: #555; }
+        section { margin-bottom: 24px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; }
+
+        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+        .btn-light { background: #e0e0e0; }
+        .btn-medium { background: #90caf9; }
+        .btn-heavy { background: #ef9a9a; }
+        .btn:active { transform: scale(0.95); }
+
+        .slider-row { display: flex; align-items: center; gap: 12px; }
+        .slider-row input[type="range"] { flex: 1; }
+        .slider-value { min-width: 3ch; text-align: center; }
+
+        .toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+
+        .cards { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+        .card {
+            width: 60px; height: 60px;
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: bold; color: #fff;
+            transition: transform 0.3s;
+        }
+
+        #shake-status {
+            margin-top: 8px;
+            padding: 8px;
+            background: #f5f5f5;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+
+        #log {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            max-height: 30vh;
+            overflow-y: auto;
+            background: #1e1e1e;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 0.75rem;
+            padding: 8px;
+        }
+        #log .out { color: #4fc3f7; }
+        #log .in { color: #aed581; }
+        #log .info { color: #888; }
+    </style>
+</head>
+<body>
+    <h1>JS Bridge Demo</h1>
+
+    <!-- Haptic Section -->
+    <section id="haptic-demo">
+        <h2>Web → Native: Haptic Feedback</h2>
+        <div class="btn-row">
+            <button class="btn btn-light" data-haptic="light">Light</button>
+            <button class="btn btn-medium" data-haptic="medium">Medium</button>
+            <button class="btn btn-heavy" data-haptic="heavy">Heavy</button>
+        </div>
+        <div class="slider-row">
+            <label>Slider:</label>
+            <input type="range" id="haptic-slider" min="0" max="100" value="50">
+            <span class="slider-value" id="slider-value">50</span>
+        </div>
+        <div class="toggle-row">
+            <label for="haptic-toggle">Toggle:</label>
+            <input type="checkbox" id="haptic-toggle">
+        </div>
+    </section>
+
+    <!-- Shake Section -->
+    <section id="shake-demo">
+        <h2>Native → Web: Shake Response</h2>
+        <p>Shake your device to trigger actions:</p>
+        <ul style="margin: 8px 0 8px 20px; font-size: 0.85rem;">
+            <li><strong>Lateral (x-axis)</strong> — randomize background color</li>
+            <li><strong>Vertical (y-axis)</strong> — shuffle cards</li>
+            <li><strong>Hard shake (intensity &gt; 0.8)</strong> — reset page</li>
+        </ul>
+        <div class="cards" id="card-container"></div>
+        <div id="shake-status">No shake detected yet.</div>
+    </section>
+
+    <!-- Debug Log -->
+    <div id="log"></div>
+
+    <script>
+    (function () {
+        // ===== Debug Logger =====
+        const logEl = document.getElementById("log");
+        function log(direction, text) {
+            const time = new Date().toLocaleTimeString("en-US", { hour12: false, fractionalSecondDigits: 3 });
+            const div = document.createElement("div");
+            div.className = direction; // "out", "in", "info"
+            div.textContent = `[${time}] ${direction.toUpperCase()}: ${text}`;
+            logEl.appendChild(div);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // ===== Bridge Layer =====
+        const Bridge = {
+            send(action, payload) {
+                const message = JSON.stringify({ action, payload });
+                if (window.Android && window.Android.postMessage) {
+                    window.Android.postMessage(message);
+                    log("out", message);
+                } else if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.bridge) {
+                    window.webkit.messageHandlers.bridge.postMessage({ action, payload });
+                    log("out", message);
+                } else {
+                    log("info", `[no native host] ${message}`);
+                }
+            },
+
+            handlers: {},
+
+            on(event, fn) {
+                this.handlers[event] = fn;
+            },
+
+            receive(msg) {
+                log("in", JSON.stringify(msg));
+                const handler = this.handlers[msg.event];
+                if (handler) {
+                    handler(msg.data);
+                } else {
+                    log("info", `No handler for event: ${msg.event}`);
+                }
+            }
+        };
+
+        // Expose globally for native to call
+        window.bridgeReceive = function (msg) {
+            Bridge.receive(msg);
+        };
+
+        // ===== Haptic Demo =====
+        // Buttons
+        document.querySelectorAll("[data-haptic]").forEach(btn => {
+            btn.addEventListener("pointerdown", () => {
+                Bridge.send("haptic", { type: btn.dataset.haptic });
+            });
+        });
+
+        // Slider with debounced haptic ticks
+        const slider = document.getElementById("haptic-slider");
+        const sliderValue = document.getElementById("slider-value");
+        let lastTick = 0;
+        slider.addEventListener("input", () => {
+            sliderValue.textContent = slider.value;
+            const currentTick = Math.floor(slider.value / 10);
+            if (currentTick !== lastTick) {
+                lastTick = currentTick;
+                Bridge.send("haptic", { type: "light" });
+            }
+        });
+
+        // Toggle
+        const toggle = document.getElementById("haptic-toggle");
+        toggle.addEventListener("change", () => {
+            Bridge.send("haptic", { type: "medium" });
+        });
+
+        // ===== Shake Demo =====
+        const cardContainer = document.getElementById("card-container");
+        const shakeStatus = document.getElementById("shake-status");
+        const cardColors = ["#e53935","#8e24aa","#1e88e5","#43a047","#fb8c00","#6d4c41"];
+        let cards = cardColors.map((c, i) => ({ id: i + 1, color: c }));
+
+        function renderCards() {
+            cardContainer.innerHTML = "";
+            cards.forEach(c => {
+                const el = document.createElement("div");
+                el.className = "card";
+                el.style.background = c.color;
+                el.textContent = c.id;
+                cardContainer.appendChild(el);
+            });
+        }
+        renderCards();
+
+        // Shake handlers
+        Bridge.on("shake", (data) => {
+            const { axis, intensity } = data;
+            shakeStatus.textContent = `Shake: axis=${axis}, intensity=${intensity.toFixed(2)}`;
+
+            if (intensity > 0.8) {
+                // Hard shake: reset
+                document.body.style.backgroundColor = "";
+                cards = cardColors.map((c, i) => ({ id: i + 1, color: c }));
+                renderCards();
+                shakeStatus.textContent += " → RESET";
+                return;
+            }
+
+            if (axis === "x") {
+                // Lateral: random background
+                const hue = Math.floor(Math.random() * 360);
+                document.body.style.backgroundColor = `hsl(${hue}, 60%, 90%)`;
+                shakeStatus.textContent += " → Background changed";
+            } else if (axis === "y") {
+                // Vertical: shuffle cards
+                for (let i = cards.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [cards[i], cards[j]] = [cards[j], cards[i]];
+                }
+                renderCards();
+                shakeStatus.textContent += " → Cards shuffled";
+            }
+        });
+
+        // ===== Ready Handshake =====
+        Bridge.send("ready", {});
+        log("info", "Bridge ready. Waiting for native events...");
+    })();
+    </script>
+</body>
+</html>
