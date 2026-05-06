@@ -217,212 +217,511 @@
       </div>
     </div>
 
-    <script type="module">
-      import GameBridge from "./GameBridge.js";
+    <script>
+      // --- GameBridge (inlined for WebView compatibility) ---
+      const GameBridge = (() => {
+        const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent);
+        const IS_ANDROID = /Android/.test(navigator.userAgent);
 
-      // --- Helpers ---
-      function flash(id, msg) {
-        const el = document.getElementById(id);
-        el.textContent = msg;
-        el.classList.add("flash");
-        setTimeout(() => el.classList.remove("flash"), 400);
-      }
-
-      let unlocked = false;
-      async function ensureUnlock() {
-        if (!unlocked) {
-          await GameBridge.audio.unlock();
-          unlocked = true;
-        }
-      }
-
-      // --- Init ---
-      const caps = await GameBridge.init();
-      document.getElementById("caps").textContent =
-        `platform: ${caps.platform} | vibration: ${caps.vibration} | audio: ${caps.audio} | motion: ${caps.motion}`;
-
-      // --- Synthesize pop sound (OfflineAudioContext → Blob URL → GameBridge.audio.load) ---
-      async function createPopSound() {
-        const sampleRate = 44100;
-        const duration = 0.15;
-        const length = sampleRate * duration;
-        const offline = new OfflineAudioContext(1, length, sampleRate);
-
-        const osc = offline.createOscillator();
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(600, 0);
-        osc.frequency.exponentialRampToValueAtTime(150, duration);
-
-        const gain = offline.createGain();
-        gain.gain.setValueAtTime(0.7, 0);
-        gain.gain.exponentialRampToValueAtTime(0.01, duration);
-
-        osc.connect(gain);
-        gain.connect(offline.destination);
-        osc.start(0);
-        osc.stop(duration);
-
-        const rendered = await offline.startRendering();
-
-        // Encode as WAV
-        const numChannels = 1;
-        const bitsPerSample = 16;
-        const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
-        const blockAlign = (numChannels * bitsPerSample) / 8;
-        const dataSize = (rendered.length * numChannels * bitsPerSample) / 8;
-        const buffer = new ArrayBuffer(44 + dataSize);
-        const view = new DataView(buffer);
-
-        function writeString(offset, str) {
-          for (let i = 0; i < str.length; i++)
-            view.setUint8(offset + i, str.charCodeAt(i));
+        function sendToNative(msg) {
+          if (IS_IOS) {
+            if (!window.webkit?.messageHandlers?.gameBridge) {
+              console.warn("[GameBridge] iOS native bridge not available");
+              return;
+            }
+            window.webkit.messageHandlers.gameBridge.postMessage(msg);
+          } else if (IS_ANDROID) {
+            if (!window.NativeBridge?.postMessage) {
+              console.warn("[GameBridge] Android native bridge not available");
+              return;
+            }
+            window.NativeBridge.postMessage(JSON.stringify(msg));
+          } else {
+            console.warn(
+              "[GameBridge] native bridge not available (unsupported platform)",
+            );
+          }
         }
 
-        writeString(0, "RIFF");
-        view.setUint32(4, 36 + dataSize, true);
-        writeString(8, "WAVE");
-        writeString(12, "fmt ");
-        view.setUint32(16, 16, true);
-        view.setUint16(20, 1, true);
-        view.setUint16(22, numChannels, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, byteRate, true);
-        view.setUint16(32, blockAlign, true);
-        view.setUint16(34, bitsPerSample, true);
-        writeString(36, "data");
-        view.setUint32(40, dataSize, true);
-
-        const samples = rendered.getChannelData(0);
-        let offset = 44;
-        for (let i = 0; i < samples.length; i++) {
-          const s = Math.max(-1, Math.min(1, samples[i]));
-          view.setInt16(offset, s * 0x7fff, true);
-          offset += 2;
+        function vibrate(pattern) {
+          const p = Array.isArray(pattern) ? pattern : [pattern];
+          if (IS_IOS) {
+            sendToNative({ type: "vibrate", pattern: p });
+          } else {
+            navigator.vibrate?.(p);
+          }
         }
 
-        const blob = new Blob([buffer], { type: "audio/wav" });
-        return URL.createObjectURL(blob);
-      }
+        function vibrateCancel() {
+          if (IS_IOS) {
+            sendToNative({ type: "vibrateCancel" });
+          } else {
+            navigator.vibrate?.(0);
+          }
+        }
 
-      const popUrl = await createPopSound();
-      await GameBridge.audio.load("pop", popUrl);
+        const audio = (() => {
+          let ctx = null;
+          let buffers = {};
+          const activeNodes = new Map();
+          const loading = new Map();
 
-      // --- Haptic Feedback ---
-      document
-        .getElementById("haptic-light")
-        .addEventListener("click", async () => {
-          await ensureUnlock();
-          GameBridge.vibrate(30);
-          flash("haptic-fb", "Light haptic (30ms)");
-        });
-      document
-        .getElementById("haptic-medium")
-        .addEventListener("click", async () => {
-          await ensureUnlock();
-          GameBridge.vibrate(100);
-          flash("haptic-fb", "Medium haptic (100ms)");
-        });
-      document
-        .getElementById("haptic-heavy")
-        .addEventListener("click", async () => {
-          await ensureUnlock();
-          GameBridge.vibrate(300);
-          flash("haptic-fb", "Heavy haptic (300ms)");
-        });
-
-      // --- Vibration Patterns ---
-      document
-        .getElementById("vib-single")
-        .addEventListener("click", async () => {
-          await ensureUnlock();
-          GameBridge.vibrate(200);
-          flash("vib-fb", "Single buzz (200ms)");
-        });
-      document
-        .getElementById("vib-double")
-        .addEventListener("click", async () => {
-          await ensureUnlock();
-          GameBridge.vibrate([100, 50, 100]);
-          flash("vib-fb", "Double tap [100, 50, 100]");
-        });
-      document.getElementById("vib-sos").addEventListener("click", async () => {
-        await ensureUnlock();
-        GameBridge.vibrate([
-          100, 30, 100, 30, 100, 200, 300, 30, 300, 30, 300, 200, 100, 30, 100,
-          30, 100,
-        ]);
-        flash("vib-fb", "SOS pattern");
-      });
-      document.getElementById("vib-cancel").addEventListener("click", () => {
-        GameBridge.vibrateCancel();
-        flash("vib-fb", "Vibration cancelled");
-      });
-
-      // --- Pop Sound ---
-      document.getElementById("pop-btn").addEventListener("click", async () => {
-        await ensureUnlock();
-        GameBridge.audio.play("pop");
-        flash("pop-fb", "Pop!");
-      });
-
-      // --- Rapid Pop Array ---
-      document
-        .getElementById("rapid-btn")
-        .addEventListener("click", async () => {
-          await ensureUnlock();
-          const dots = document.querySelectorAll("#pop-dots .pop-dot");
-          dots.forEach(d => d.classList.remove("fired"));
-
-          for (let i = 0; i < 8; i++) {
-            setTimeout(() => {
-              GameBridge.audio.play("pop");
-              dots[i].classList.add("fired");
-            }, i * 60);
+          function clamp01(v) {
+            return Math.max(0, Math.min(1, v));
           }
 
-          setTimeout(
-            () => {
-              dots.forEach(d => d.classList.remove("fired"));
-            },
-            8 * 60 + 300,
-          );
-
-          flash("rapid-fb", "8 pops fired @ 60ms intervals");
-        });
-
-      // --- Motion Detection ---
-      let motionUnsub = null;
-
-      document
-        .getElementById("motion-start")
-        .addEventListener("click", async () => {
-          await ensureUnlock();
-          const result = await GameBridge.motion.requestPermission();
-          if (result !== "granted") {
-            flash("motion-fb", `Motion permission: ${result}`);
-            return;
+          function getContext() {
+            if (!ctx) {
+              try {
+                ctx = new (window.AudioContext || window.webkitAudioContext)();
+              } catch (err) {
+                console.warn("[GameBridge] AudioContext unavailable", err);
+                return null;
+              }
+            }
+            return ctx;
           }
 
-          flash("motion-fb", "Motion active");
-          document.getElementById("motion-grid").style.display = "grid";
-          document.getElementById("motion-start").style.display = "none";
-          document.getElementById("motion-stop").style.display = "inline-block";
+          async function unlock() {
+            const c = getContext();
+            if (!c) return;
+            if (c.state === "suspended") await c.resume();
+          }
 
-          motionUnsub = GameBridge.motion.on(({ x, y, z }) => {
-            document.getElementById("mx").textContent = x.toFixed(2);
-            document.getElementById("my").textContent = y.toFixed(2);
-            document.getElementById("mz").textContent = z.toFixed(2);
+          async function load(id, url) {
+            if (loading.has(id)) return loading.get(id);
+            const promise = (async () => {
+              const c = getContext();
+              if (!c)
+                throw new Error(
+                  `[GameBridge] audio.load("${id}"): AudioContext unavailable`,
+                );
+              const res = await fetch(url);
+              if (!res.ok)
+                throw new Error(
+                  `[GameBridge] audio.load("${id}"): fetch failed (${res.status})`,
+                );
+              const arrayBuffer = await res.arrayBuffer();
+              buffers[id] = await c.decodeAudioData(arrayBuffer);
+            })();
+            loading.set(id, promise);
+            try {
+              await promise;
+            } finally {
+              loading.delete(id);
+            }
+          }
+
+          function play(id, { volume = 1, loop = false } = {}) {
+            if (!buffers[id]) {
+              console.warn(`GameBridge.audio: "${id}" not loaded`);
+              return {
+                stop() {},
+                addEventListener() {},
+                loop: false,
+                buffer: null,
+              };
+            }
+            const c = getContext();
+            if (!c) {
+              console.warn("[GameBridge] audio.play: AudioContext unavailable");
+              return {
+                stop() {},
+                addEventListener() {},
+                loop: false,
+                buffer: null,
+              };
+            }
+            const src = c.createBufferSource();
+            src.buffer = buffers[id];
+            src.loop = loop;
+            const gain = c.createGain();
+            gain.gain.value = clamp01(volume);
+            if (!activeNodes.has(id)) activeNodes.set(id, new Set());
+            const entry = { gain, src };
+            activeNodes.get(id).add(entry);
+            src.addEventListener("ended", () => {
+              activeNodes.get(id)?.delete(entry);
+            });
+            src.connect(gain);
+            gain.connect(c.destination);
+            src.start(0);
+            return src;
+          }
+
+          function setVolume(id, value) {
+            const clamped = clamp01(value);
+            const entries = activeNodes.get(id);
+            if (entries)
+              entries.forEach(e => {
+                e.gain.gain.value = clamped;
+              });
+          }
+
+          function unload(id) {
+            const entries = activeNodes.get(id);
+            if (entries) {
+              entries.forEach(e => {
+                try {
+                  e.src.stop();
+                } catch (_) {}
+              });
+              activeNodes.delete(id);
+            }
+            delete buffers[id];
+          }
+
+          function stop(id) {
+            const entries = activeNodes.get(id);
+            if (entries) {
+              entries.forEach(e => {
+                try {
+                  e.src.stop();
+                } catch (_) {}
+              });
+              activeNodes.delete(id);
+            }
+          }
+
+          function stopAll() {
+            activeNodes.forEach(entries => {
+              entries.forEach(e => {
+                try {
+                  e.src.stop();
+                } catch (_) {}
+              });
+            });
+            activeNodes.clear();
+          }
+
+          function dispose() {
+            stopAll();
+            buffers = {};
+            if (ctx) {
+              ctx.close();
+              ctx = null;
+            }
+          }
+
+          return {
+            unlock,
+            load,
+            play,
+            stop,
+            stopAll,
+            setVolume,
+            unload,
+            dispose,
+          };
+        })();
+
+        const motion = (() => {
+          const MAX_LISTENERS = 20;
+          let listeners = [];
+          let permitted = false;
+          let webListenerAttached = false;
+
+          function emit(data) {
+            listeners.forEach(fn => fn(data));
+          }
+
+          function attachWebListener() {
+            if (webListenerAttached) return;
+            webListenerAttached = true;
+            window.addEventListener("devicemotion", e => {
+              const a = e.accelerationIncludingGravity;
+              if (!a) return;
+              emit({ x: a.x ?? 0, y: a.y ?? 0, z: a.z ?? 0 });
+            });
+          }
+
+          window.addEventListener("message", e => {
+            if (e.origin !== "null" && e.origin !== window.location.origin)
+              return;
+            try {
+              const msg =
+                typeof e.data === "string" ? JSON.parse(e.data) : e.data;
+              if (msg?.type === "motion")
+                emit({ x: msg.x, y: msg.y, z: msg.z });
+            } catch (_) {}
           });
+
+          async function requestPermission() {
+            if (typeof DeviceMotionEvent?.requestPermission === "function") {
+              try {
+                const result = await DeviceMotionEvent.requestPermission();
+                if (result === "granted") {
+                  permitted = true;
+                  attachWebListener();
+                }
+                return result;
+              } catch (err) {
+                console.warn("GameBridge.motion: permission error", err);
+                return "denied";
+              }
+            }
+            if (window.DeviceMotionEvent) {
+              permitted = true;
+              attachWebListener();
+              return "granted";
+            }
+            return "unavailable";
+          }
+
+          function on(fn) {
+            listeners.push(fn);
+            if (listeners.length > MAX_LISTENERS) {
+              console.warn(
+                `[GameBridge] motion: possible listener leak (${listeners.length} registered)`,
+              );
+            }
+            if (!permitted) {
+              console.warn(
+                "GameBridge.motion: call requestPermission() first (inside a user gesture)",
+              );
+            }
+            return () => {
+              listeners = listeners.filter(l => l !== fn);
+            };
+          }
+
+          function off() {
+            listeners = [];
+          }
+
+          return { requestPermission, on, off };
+        })();
+
+        async function init() {
+          const caps = {
+            platform: IS_IOS ? "ios" : IS_ANDROID ? "android" : "other",
+            vibration: IS_IOS ? "native-bridge" : !!navigator.vibrate,
+            audio: !!(window.AudioContext || window.webkitAudioContext),
+            motion: IS_IOS
+              ? typeof DeviceMotionEvent?.requestPermission === "function"
+                ? "permission-required"
+                : "unavailable"
+              : !!window.DeviceMotionEvent,
+          };
+          console.log("[GameBridge] capabilities", caps);
+          return caps;
+        }
+
+        return { init, vibrate, vibrateCancel, audio, motion };
+      })();
+    </script>
+    <script>
+      (async () => {
+        // --- Helpers ---
+        function flash(id, msg) {
+          const el = document.getElementById(id);
+          el.textContent = msg;
+          el.classList.add("flash");
+          setTimeout(() => el.classList.remove("flash"), 400);
+        }
+
+        let unlocked = false;
+        async function ensureUnlock() {
+          if (!unlocked) {
+            await GameBridge.audio.unlock();
+            unlocked = true;
+          }
+        }
+
+        // --- Init ---
+        const caps = await GameBridge.init();
+        document.getElementById("caps").textContent =
+          `platform: ${caps.platform} | vibration: ${caps.vibration} | audio: ${caps.audio} | motion: ${caps.motion}`;
+
+        // --- Synthesize pop sound (OfflineAudioContext → Blob URL → GameBridge.audio.load) ---
+        async function createPopSound() {
+          const sampleRate = 44100;
+          const duration = 0.15;
+          const length = sampleRate * duration;
+          const offline = new OfflineAudioContext(1, length, sampleRate);
+
+          const osc = offline.createOscillator();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(600, 0);
+          osc.frequency.exponentialRampToValueAtTime(150, duration);
+
+          const gain = offline.createGain();
+          gain.gain.setValueAtTime(0.7, 0);
+          gain.gain.exponentialRampToValueAtTime(0.01, duration);
+
+          osc.connect(gain);
+          gain.connect(offline.destination);
+          osc.start(0);
+          osc.stop(duration);
+
+          const rendered = await offline.startRendering();
+
+          // Encode as WAV
+          const numChannels = 1;
+          const bitsPerSample = 16;
+          const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+          const blockAlign = (numChannels * bitsPerSample) / 8;
+          const dataSize = (rendered.length * numChannels * bitsPerSample) / 8;
+          const buffer = new ArrayBuffer(44 + dataSize);
+          const view = new DataView(buffer);
+
+          function writeString(offset, str) {
+            for (let i = 0; i < str.length; i++)
+              view.setUint8(offset + i, str.charCodeAt(i));
+          }
+
+          writeString(0, "RIFF");
+          view.setUint32(4, 36 + dataSize, true);
+          writeString(8, "WAVE");
+          writeString(12, "fmt ");
+          view.setUint32(16, 16, true);
+          view.setUint16(20, 1, true);
+          view.setUint16(22, numChannels, true);
+          view.setUint32(24, sampleRate, true);
+          view.setUint32(28, byteRate, true);
+          view.setUint16(32, blockAlign, true);
+          view.setUint16(34, bitsPerSample, true);
+          writeString(36, "data");
+          view.setUint32(40, dataSize, true);
+
+          const samples = rendered.getChannelData(0);
+          let offset = 44;
+          for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            view.setInt16(offset, s * 0x7fff, true);
+            offset += 2;
+          }
+
+          const blob = new Blob([buffer], { type: "audio/wav" });
+          return URL.createObjectURL(blob);
+        }
+
+        const popUrl = await createPopSound();
+        await GameBridge.audio.load("pop", popUrl);
+
+        // --- Haptic Feedback ---
+        document
+          .getElementById("haptic-light")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            GameBridge.vibrate(30);
+            flash("haptic-fb", "Light haptic (30ms)");
+          });
+        document
+          .getElementById("haptic-medium")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            GameBridge.vibrate(100);
+            flash("haptic-fb", "Medium haptic (100ms)");
+          });
+        document
+          .getElementById("haptic-heavy")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            GameBridge.vibrate(300);
+            flash("haptic-fb", "Heavy haptic (300ms)");
+          });
+
+        // --- Vibration Patterns ---
+        document
+          .getElementById("vib-single")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            GameBridge.vibrate(200);
+            flash("vib-fb", "Single buzz (200ms)");
+          });
+        document
+          .getElementById("vib-double")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            GameBridge.vibrate([100, 50, 100]);
+            flash("vib-fb", "Double tap [100, 50, 100]");
+          });
+        document
+          .getElementById("vib-sos")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            GameBridge.vibrate([
+              100, 30, 100, 30, 100, 200, 300, 30, 300, 30, 300, 200, 100, 30,
+              100, 30, 100,
+            ]);
+            flash("vib-fb", "SOS pattern");
+          });
+        document.getElementById("vib-cancel").addEventListener("click", () => {
+          GameBridge.vibrateCancel();
+          flash("vib-fb", "Vibration cancelled");
         });
 
-      document.getElementById("motion-stop").addEventListener("click", () => {
-        GameBridge.motion.off();
-        motionUnsub = null;
-        document.getElementById("motion-grid").style.display = "none";
-        document.getElementById("motion-start").style.display = "inline-block";
-        document.getElementById("motion-stop").style.display = "none";
-        flash("motion-fb", "Motion stopped");
-      });
+        // --- Pop Sound ---
+        document
+          .getElementById("pop-btn")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            GameBridge.audio.play("pop");
+            flash("pop-fb", "Pop!");
+          });
+
+        // --- Rapid Pop Array ---
+        document
+          .getElementById("rapid-btn")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            const dots = document.querySelectorAll("#pop-dots .pop-dot");
+            dots.forEach(d => d.classList.remove("fired"));
+
+            for (let i = 0; i < 8; i++) {
+              setTimeout(() => {
+                GameBridge.audio.play("pop");
+                dots[i].classList.add("fired");
+              }, i * 60);
+            }
+
+            setTimeout(
+              () => {
+                dots.forEach(d => d.classList.remove("fired"));
+              },
+              8 * 60 + 300,
+            );
+
+            flash("rapid-fb", "8 pops fired @ 60ms intervals");
+          });
+
+        // --- Motion Detection ---
+        let motionUnsub = null;
+
+        document
+          .getElementById("motion-start")
+          .addEventListener("click", async () => {
+            await ensureUnlock();
+            const result = await GameBridge.motion.requestPermission();
+            if (result !== "granted") {
+              flash("motion-fb", `Motion permission: ${result}`);
+              return;
+            }
+
+            flash("motion-fb", "Motion active");
+            document.getElementById("motion-grid").style.display = "grid";
+            document.getElementById("motion-start").style.display = "none";
+            document.getElementById("motion-stop").style.display =
+              "inline-block";
+
+            motionUnsub = GameBridge.motion.on(({ x, y, z }) => {
+              document.getElementById("mx").textContent = x.toFixed(2);
+              document.getElementById("my").textContent = y.toFixed(2);
+              document.getElementById("mz").textContent = z.toFixed(2);
+            });
+          });
+
+        document.getElementById("motion-stop").addEventListener("click", () => {
+          GameBridge.motion.off();
+          motionUnsub = null;
+          document.getElementById("motion-grid").style.display = "none";
+          document.getElementById("motion-start").style.display =
+            "inline-block";
+          document.getElementById("motion-stop").style.display = "none";
+          flash("motion-fb", "Motion stopped");
+        });
+      })();
     </script>
   </body>
 </html>
