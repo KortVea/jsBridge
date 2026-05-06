@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Web API Demo</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #1a1a2e;
+        color: #eaeaea;
+        padding: 16px;
+        min-height: 100vh;
+      }
+      h1 {
+        text-align: center;
+        margin-bottom: 20px;
+        font-size: 1.4rem;
+        color: #00d4ff;
+      }
+      .card {
+        background: #16213e;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+        border: 1px solid #0f3460;
+      }
+      .card h2 {
+        font-size: 1.1rem;
+        margin-bottom: 12px;
+        color: #e94560;
+      }
+      .status {
+        font-size: 0.8rem;
+        padding: 4px 8px;
+        border-radius: 4px;
+        display: inline-block;
+        margin-bottom: 12px;
+      }
+      .supported {
+        background: #064e3b;
+        color: #6ee7b7;
+      }
+      .unsupported {
+        background: #7f1d1d;
+        color: #fca5a5;
+      }
+      .btn {
+        display: inline-block;
+        padding: 14px 24px;
+        margin: 6px 4px;
+        border: none;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          transform 0.1s,
+          opacity 0.1s;
+        color: #fff;
+      }
+      .btn:active {
+        transform: scale(0.95);
+        opacity: 0.8;
+      }
+      .btn-vibrate {
+        background: #7c3aed;
+      }
+      .btn-pattern {
+        background: #6d28d9;
+      }
+      .btn-pop {
+        background: #ea580c;
+      }
+      .btn-motion {
+        background: #0891b2;
+      }
+      .btn-stop {
+        background: #dc2626;
+      }
+      .feedback {
+        margin-top: 10px;
+        padding: 8px;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        min-height: 24px;
+        background: #1e293b;
+        transition: background 0.3s;
+      }
+      .flash {
+        background: #065f46 !important;
+      }
+      .motion-data {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .motion-data div {
+        background: #1e293b;
+        padding: 8px;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-family: monospace;
+      }
+      .motion-data span {
+        color: #00d4ff;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>WebView API Demo</h1>
+
+    <!-- Vibration API -->
+    <div class="card">
+      <h2>Haptics / Vibration</h2>
+      <div id="vibrate-status" class="status">Checking...</div>
+      <div>
+        <button class="btn btn-vibrate" onclick="doVibrate()">
+          Vibrate (200ms)
+        </button>
+        <button class="btn btn-pattern" onclick="doVibratePattern()">
+          Pattern
+        </button>
+      </div>
+      <div id="vibrate-feedback" class="feedback"></div>
+    </div>
+
+    <!-- Audio API -->
+    <div class="card">
+      <h2>Audio — Bubble Pop</h2>
+      <div id="audio-status" class="status">Checking...</div>
+      <div>
+        <button class="btn btn-pop" onclick="doPop()">Pop!</button>
+      </div>
+      <div id="audio-feedback" class="feedback"></div>
+    </div>
+
+    <!-- Motion API -->
+    <div class="card">
+      <h2>Motion Detection</h2>
+      <div id="motion-status" class="status">Checking...</div>
+      <div>
+        <button class="btn btn-motion" id="motion-btn" onclick="startMotion()">
+          Start Motion
+        </button>
+        <button
+          class="btn btn-stop"
+          onclick="stopMotion()"
+          style="display: none"
+          id="stop-btn"
+        >
+          Stop
+        </button>
+      </div>
+      <div id="motion-feedback" class="feedback"></div>
+      <div class="motion-data" id="motion-data" style="display: none">
+        <div>aX: <span id="ax">—</span></div>
+        <div>aY: <span id="ay">—</span></div>
+        <div>aZ: <span id="az">—</span></div>
+        <div>α: <span id="alpha">—</span></div>
+        <div>β: <span id="beta">—</span></div>
+        <div>γ: <span id="gamma">—</span></div>
+      </div>
+    </div>
+
+    <script>
+      // --- Utilities ---
+      function flash(elId, msg) {
+        const el = document.getElementById(elId);
+        el.textContent = msg;
+        el.classList.add("flash");
+        setTimeout(() => el.classList.remove("flash"), 400);
+      }
+
+      function setStatus(elId, supported, label) {
+        const el = document.getElementById(elId);
+        el.textContent = label || (supported ? "Supported" : "Not supported");
+        el.className = "status " + (supported ? "supported" : "unsupported");
+      }
+
+      // --- Vibration API ---
+      const vibrateSupported = "vibrate" in navigator;
+      setStatus("vibrate-status", vibrateSupported);
+
+      function doVibrate() {
+        if (!vibrateSupported) {
+          flash("vibrate-feedback", "Vibration API not available");
+          return;
+        }
+        navigator.vibrate(200);
+        flash("vibrate-feedback", "Vibrated 200ms");
+      }
+
+      function doVibratePattern() {
+        if (!vibrateSupported) {
+          flash("vibrate-feedback", "Vibration API not available");
+          return;
+        }
+        navigator.vibrate([100, 50, 100, 50, 200]);
+        flash("vibrate-feedback", "Pattern: 100-50-100-50-200");
+      }
+
+      // --- Audio: Bubble Pop (synthesized) ---
+      let audioCtx = null;
+      const audioSupported = !!(
+        window.AudioContext || window.webkitAudioContext
+      );
+      setStatus("audio-status", audioSupported);
+
+      function getAudioContext() {
+        if (!audioCtx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          audioCtx = new AC();
+        }
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        return audioCtx;
+      }
+
+      function doPop() {
+        if (!audioSupported) {
+          flash("audio-feedback", "Web Audio API not available");
+          return;
+        }
+        const ctx = getAudioContext();
+        const now = ctx.currentTime;
+
+        // Oscillator: sine wave, rapid pitch drop = bubble pop character
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(150, now + 0.1);
+
+        // Gain envelope: quick attack, fast decay
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.6, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.15);
+
+        flash("audio-feedback", "Pop! (AudioContext: " + ctx.state + ")");
+      }
+
+      // --- Motion Detection ---
+      const motionSupported = "DeviceMotionEvent" in window;
+      const orientationSupported = "DeviceOrientationEvent" in window;
+      setStatus(
+        "motion-status",
+        motionSupported || orientationSupported,
+        (motionSupported ? "Motion ✓" : "Motion ✗") +
+          " | " +
+          (orientationSupported ? "Orientation ✓" : "Orientation ✗"),
+      );
+
+      let motionActive = false;
+
+      function onMotion(e) {
+        const a = e.accelerationIncludingGravity || {};
+        document.getElementById("ax").textContent = (a.x || 0).toFixed(2);
+        document.getElementById("ay").textContent = (a.y || 0).toFixed(2);
+        document.getElementById("az").textContent = (a.z || 0).toFixed(2);
+      }
+
+      function onOrientation(e) {
+        document.getElementById("alpha").textContent = (e.alpha || 0).toFixed(
+          1,
+        );
+        document.getElementById("beta").textContent = (e.beta || 0).toFixed(1);
+        document.getElementById("gamma").textContent = (e.gamma || 0).toFixed(
+          1,
+        );
+      }
+
+      async function startMotion() {
+        if (motionActive) return;
+
+        // Handle permission request (required on iOS 13+, not needed on Android but safe to try)
+        if (typeof DeviceMotionEvent.requestPermission === "function") {
+          try {
+            const perm = await DeviceMotionEvent.requestPermission();
+            if (perm !== "granted") {
+              flash("motion-feedback", "Permission denied");
+              return;
+            }
+          } catch (err) {
+            flash("motion-feedback", "Permission error: " + err.message);
+            return;
+          }
+        }
+
+        window.addEventListener("devicemotion", onMotion);
+        window.addEventListener("deviceorientation", onOrientation);
+        motionActive = true;
+
+        document.getElementById("motion-data").style.display = "grid";
+        document.getElementById("motion-btn").style.display = "none";
+        document.getElementById("stop-btn").style.display = "inline-block";
+        flash("motion-feedback", "Listening for motion events...");
+      }
+
+      function stopMotion() {
+        window.removeEventListener("devicemotion", onMotion);
+        window.removeEventListener("deviceorientation", onOrientation);
+        motionActive = false;
+
+        document.getElementById("motion-data").style.display = "none";
+        document.getElementById("motion-btn").style.display = "inline-block";
+        document.getElementById("stop-btn").style.display = "none";
+        flash("motion-feedback", "Stopped");
+      }
+    </script>
+  </body>
+</html>
